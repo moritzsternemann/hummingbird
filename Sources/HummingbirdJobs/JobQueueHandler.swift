@@ -14,6 +14,7 @@
 
 import Hummingbird
 import Logging
+import ServiceLifecycle
 
 /// Object handling a single job queue
 public final class HBJobQueueHandler {
@@ -32,8 +33,8 @@ public final class HBJobQueueHandler {
     }
 
     /// Start queue workers
-    public func start() {
-        self.queue.onInit(on: self.eventLoop).whenComplete { _ in
+    public func start() -> EventLoopFuture<Void> {
+        self.queue.onInit(on: self.eventLoop).map { _ in
             self.workers.forEach {
                 $0.start()
             }
@@ -52,6 +53,16 @@ public final class HBJobQueueHandler {
     private let eventLoop: EventLoop
     fileprivate let queue: HBJobQueue
     private let workers: [HBJobQueueWorker]
+}
+
+/// TODO: Temporarily I have added unchecked Sendable conformance to the class as Sendable
+/// conformance is required by `Service`. I will need to revisit this.
+extension HBJobQueueHandler: Service, @unchecked Sendable {
+    public func run() async throws {
+        try await self.start().get()
+        await GracefulShutdownWaiter().wait()
+        try await self.shutdown().get()
+    }
 }
 
 /// Job queue id
@@ -83,7 +94,7 @@ public struct HBJobQueueId: Hashable, ExpressibleByStringLiteral {
 
 extension HBApplication {
     /// Object internal to `HBApplication` that handles its array of JobQueues.
-    public class JobQueueHandler {
+    public final class JobQueueHandler {
         /// Job queue id
         public typealias QueueKey = HBJobQueueId
         /// The default JobQueue setup at initialisation
@@ -122,22 +133,28 @@ extension HBApplication {
             self.queues[id] = handler
         }
 
-        func start() {
-            for queue in self.queues {
-                queue.value.start()
-            }
-        }
-
-        func shutdown() -> EventLoopFuture<Void> {
-            let eventLoop = self.application.eventLoopGroup.next()
-            // shutdown all queues
-            let shutdownFutures: [EventLoopFuture<Void>] = self.queues.values.map { $0.shutdown() }
-            return EventLoopFuture.andAllComplete(shutdownFutures, on: eventLoop)
+        /// Return service to run job queues
+        var service: JobQueueService {
+            .init(queues: self.queues.values.map { $0 }, logger: self.logger)
         }
 
         private let application: HBApplication
         private var logger: Logger { self.application.logger }
         private var queues: [QueueKey: HBJobQueueHandler]
+    }
+
+    struct JobQueueService: Service {
+        let queues: [HBJobQueueHandler]
+        let logger: Logger
+
+        public func run() async throws {
+            let serviceGroup = ServiceGroup(
+                services: queues,
+                configuration: .init(gracefulShutdownSignals: []),
+                logger: self.logger
+            )
+            try await serviceGroup.run()
+        }
     }
 
     /// Job queue handler
@@ -148,8 +165,33 @@ extension HBApplication {
     ///   - using: Default job queue driver
     ///   - numWorkers: Number of workers that will service the default queue
     public func addJobs(using: HBJobQueueFactory, numWorkers: Int) {
-        self.extensions.set(\.jobs, value: .init(queue: using, application: self, numWorkers: numWorkers)) { _ in
-            try! self.jobs.shutdown().wait()
+        self.extensions.set(\.jobs, value: .init(queue: using, application: self, numWorkers: numWorkers))
+        self.addService { self.jobs.service }
+    }
+}
+
+/// Used to handle waiting for graceful shutdown for services that don't have a run function.
+/// Taken from a swift forums post https://forums.swift.org/t/new-servicelifecycle-apis/65521/2
+/// from Peter Adams.
+public actor GracefulShutdownWaiter {
+    private var taskContinuation: CheckedContinuation<Void, Never>?
+
+    init() {}
+
+    func wait() async {
+        await withGracefulShutdownHandler {
+            await withCheckedContinuation { continuation in
+                self.taskContinuation = continuation
+            }
+        } onGracefulShutdown: {
+            Task {
+                await self.stop()
+            }
         }
+    }
+
+    private func stop() {
+        self.taskContinuation?.resume()
+        self.taskContinuation = nil
     }
 }

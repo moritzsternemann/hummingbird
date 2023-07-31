@@ -18,7 +18,7 @@ import NIOCore
 /// Job queue worker. Pops job off the queue and runs it. Once the job is complete goes to
 /// pop off a new job from the queue. If no job exists then if will poll the queue at regular
 /// intervals until a job is available
-class HBJobQueueWorker {
+final class HBJobQueueWorker {
     let queue: HBJobQueue
     let eventLoop: EventLoop
     var promise: EventLoopPromise<Void>

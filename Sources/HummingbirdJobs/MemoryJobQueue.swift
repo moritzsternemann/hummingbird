@@ -16,7 +16,7 @@ import Foundation
 import NIOCore
 
 /// In memory implementation of job queue driver. Stores jobs in a circular buffer
-public class HBMemoryJobQueue: HBJobQueue {
+public final class HBMemoryJobQueue: HBJobQueue {
     public let eventLoop: EventLoop
 
     /// queue of jobs

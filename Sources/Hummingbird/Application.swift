@@ -62,6 +62,8 @@ public final class HBApplication: HBExtensible, Service, @unchecked Sendable {
     var additionalChannelHandlers: [@Sendable () -> any RemovableChannelHandler]
     /// who provided the eventLoopGroup
     let eventLoopGroupProvider: NIOEventLoopGroupProvider
+    /// additional services
+    var additionalServices: [() -> any Service]
 
     // MARK: Initialization
 
@@ -108,6 +110,8 @@ public final class HBApplication: HBExtensible, Service, @unchecked Sendable {
 
         self.threadPool = NIOThreadPool(numberOfThreads: configuration.threadPoolSize)
         self.threadPool.start()
+
+        self.additionalServices = []
     }
 
     // MARK: Methods
@@ -121,15 +125,16 @@ public final class HBApplication: HBExtensible, Service, @unchecked Sendable {
             onServerRunning: self.onServerRunning,
             logger: self.logger
         )
-        try await withGracefulShutdownHandler {
-            try await server.run()
-            try await HBDateCache.shutdownDateCaches(eventLoopGroup: self.eventLoopGroup).get()
-            try self.shutdownApplication()
-        } onGracefulShutdown: {
-            Task {
-                try await server.shutdownGracefully()
-            }
-        }
+        let services = [server] + self.additionalServices.map { $0() }
+        let serviceGroup = ServiceGroup(
+            services: services,
+            configuration: .init(gracefulShutdownSignals: []),
+            logger: self.logger
+        )
+        try await serviceGroup.run()
+        self.logger.info("Shutdown")
+        try await HBDateCache.shutdownDateCaches(eventLoopGroup: self.eventLoopGroup).get()
+        try self.shutdownApplication()
     }
 
     public func runService() async throws {
@@ -156,6 +161,10 @@ public final class HBApplication: HBExtensible, Service, @unchecked Sendable {
         if case .createNew = self.eventLoopGroupProvider {
             try self.eventLoopGroup.syncShutdownGracefully()
         }
+    }
+
+    public func addService(_ service: @escaping () -> any Service) {
+        self.additionalServices.append(service)
     }
 
     public func addChannelHandler(_ handler: @autoclosure @escaping @Sendable () -> any RemovableChannelHandler) {
