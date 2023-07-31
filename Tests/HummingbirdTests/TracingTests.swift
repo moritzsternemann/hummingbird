@@ -21,7 +21,7 @@ import XCTest
 final class TracingTests: XCTestCase {
     func wait(for expectations: [XCTestExpectation], timeout: TimeInterval) async {
         #if os(Linux)
-        super.wait(for: expectation, timeout: timeout)
+        super.wait(for: expectations, timeout: timeout)
         #else
         await fulfillment(of: expectations, timeout: timeout)
         #endif
