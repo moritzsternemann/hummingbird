@@ -53,3 +53,15 @@ struct MiddlewareResponder<Context: HBRequestContext>: HBResponder {
         return self.middleware.apply(to: request, context: context, next: self.next)
     }
 }
+
+public struct HBMiddlewareClosure<Context: HBRequestContext>: HBMiddleware {
+    let cb: (HBRequest, Context, any HBResponder<Context>) -> EventLoopFuture<HBResponse>
+
+    public init(_ cb: @escaping (HBRequest, Context, any HBResponder<Context>) -> EventLoopFuture<HBResponse>) {
+        self.cb = cb
+    }
+
+    public func apply(to request: HBRequest, context: Context, next: any HBResponder<Context>) -> EventLoopFuture<HBResponse> {
+        return self.cb(request, context, next)
+    }
+}

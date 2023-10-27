@@ -61,3 +61,15 @@ struct HBPropagateServiceContextResponder<Context: HBTracingRequestContext>: HBR
         }
     }
 }
+
+public struct HBAsyncMiddlewareClosure<Context: HBRequestContext>: HBAsyncMiddleware {
+    let cb: @Sendable (HBRequest, Context, any HBResponder<Context>) async throws -> HBResponse
+
+    public init(_ cb: @escaping @Sendable (HBRequest, Context, any HBResponder<Context>) async throws -> HBResponse) {
+        self.cb = cb
+    }
+
+    public func apply(to request: HBRequest, context: Context, next: any HBResponder<Context>) async throws -> HBResponse {
+        try await self.cb(request, context, next)
+    }
+}
