@@ -13,19 +13,20 @@
 //===----------------------------------------------------------------------===//
 
 import Hummingbird
+import Logging
 import NIO
 import NIOPosix
 
 public protocol HBApplicationBenchmark {
     func setUp(_ application: HBApplication) throws
-    func singleIteration(_ client: HBEmbeddedApplication) -> EventLoopFuture<HBEmbeddedApplication.Response>
+    func singleIteration(_ client: HBApplicationWrapper) -> EventLoopFuture<HBApplicationWrapper.Response>
 }
 
 public class HBApplicationBenchmarkWrapper<AB: HBApplicationBenchmark>: BenchmarkWrapper {
     let applicationBenchmarker: AB
     let iterations: Int
 
-    var application: HBEmbeddedApplication
+    var application: HBApplicationWrapper
     let configuration: HBApplication.Configuration
 
     public init(
@@ -42,9 +43,7 @@ public class HBApplicationBenchmarkWrapper<AB: HBApplicationBenchmark>: Benchmar
     public func setUp() throws {
         // server setup
         try self.applicationBenchmarker.setUp(self.application.application)
-        // start server
         try self.application.start()
-
         // warm up
         for _ in 0..<50 {
             _ = try self.applicationBenchmarker.singleIteration(self.application).wait()
