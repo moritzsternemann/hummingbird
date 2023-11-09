@@ -4,7 +4,7 @@ import Logging
 import NIOCore
 import NIOHTTP1
 
-public struct SimpleHTTP1Channel: HBChannelSetup, HTTPChannelHandler {
+public struct SimpleHTTP1Channel: HTTP1ChannelHandler {
     public typealias In = HTTPServerRequestPart
     public typealias Out = SendableHTTPServerResponsePart
 

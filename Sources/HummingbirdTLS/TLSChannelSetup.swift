@@ -5,7 +5,7 @@ import NIOHTTP1
 import NIOSSL
 
 /// Setup child channel for HTTP1 with TLS
-public struct HTTP1WithTLSChannel: HBChannelSetup, HTTPChannelHandler {
+public struct HTTP1WithTLSChannel: HTTP1ChannelHandler {
     public typealias In = HTTPServerRequestPart
     public typealias Out = SendableHTTPServerResponsePart
 

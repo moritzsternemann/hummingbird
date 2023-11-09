@@ -97,57 +97,24 @@ public actor HBServer<ChannelSetup: HBChannelSetup>: Service {
             self.state = .starting
 
             do {
-                let (asyncChannel, quiescingHelper) = try await self.makeServer(
-                    childChannelSetup: childChannelSetup,
-                    configuration: configuration
-                )
-
                 // We have to check our state again since we just awaited on the line above
                 switch self.state {
                 case .initial, .running:
                     fatalError("We should only be running once")
 
                 case .starting:
-                    self.state = .running(asyncChannel: asyncChannel, quiescingHelper: quiescingHelper)
+                    // self.state = .running(
+                    //     asyncChannel: asyncChannel, 
+                    //     quiescingHelper: quiescingHelper
+                    // )
 
-                    await withGracefulShutdownHandler {
-                        await onServerRunning?(asyncChannel.channel)
-
-                        // We can now start to handle our work.
-                        await withDiscardingTaskGroup { group in
-                            do {
-                                for try await childChannel in asyncChannel.inbound {
-                                    switch self.state {
-                                    case .initial, .starting:
-                                        fatalError("We should already transitioned to running")
-
-                                    case .running:
-                                        group.addTask {
-                                            await childChannelSetup.handle(asyncChannel: childChannel, logger: self.logger)
-                                        }
-
-                                    case .shuttingDown, .shutdown:
-                                        group.addTask {
-                                            try? await childChannel.channel.close()
-                                        }
-                                    }
-                                }
-                            } catch {
-                                self.logger.error("Waiting on child channel: \(error)")
-                            }
-                        }
-                    } onGracefulShutdown: {
-                        Task {
-                            do {
-                                try await self.shutdownGracefully()
-                            } catch {
-                                self.logger.error("Server shutdown error: \(error)")
-                            }
-                        }
-                    }
-
+                    try await childChannelSetup.start(
+                        eventLoopGroup: self.eventLoopGroup, 
+                        configuration: configuration, 
+                        logger: logger
+                    )
                 case .shuttingDown, .shutdown:
-                    try await asyncChannel.channel.close()
+                    return
                 }
             } catch {
                 self.state = .shutdown
@@ -194,127 +161,6 @@ public actor HBServer<ChannelSetup: HBChannelSetup>: Service {
             return
         }
     }
-
-    /// Start server
-    /// - Parameter responder: Object that provides responses to requests sent to the server
-    /// - Returns: EventLoopFuture that is fulfilled when server has started
-    public func makeServer(childChannelSetup: ChannelSetup, configuration: HBServerConfiguration) async throws -> (AsyncServerChannel, ServerQuiescingHelper) {
-        let quiescingHelper = ServerQuiescingHelper(group: self.eventLoopGroup)
-        let bootstrap: ServerBootstrapProtocol
-        #if canImport(Network)
-        if let tsBootstrap = self.createTSBootstrap(
-            configuration: configuration,
-            quiescingHelper: quiescingHelper
-        ) {
-            bootstrap = tsBootstrap
-        } else {
-            #if os(iOS) || os(tvOS)
-            self.logger.warning("Running BSD sockets on iOS or tvOS is not recommended. Please use NIOTSEventLoopGroup, to run with the Network framework")
-            #endif
-            if configuration.tlsOptions.options != nil {
-                self.logger.warning("tlsOptions set in Configuration will not be applied to a BSD sockets server. Please use NIOTSEventLoopGroup, to run with the Network framework")
-            }
-            bootstrap = self.createSocketsBootstrap(
-                configuration: configuration,
-                quiescingHelper: quiescingHelper
-            )
-        }
-        #else
-        bootstrap = self.createSocketsBootstrap(
-            configuration: configuration,
-            quiescingHelper: quiescingHelper
-        )
-        #endif
-
-        @Sendable func setupChildChannel(_ channel: Channel) -> EventLoopFuture<AsyncChildChannel> {
-            childChannelSetup.initialize(
-                channel: channel,
-                configuration: configuration,
-                logger: self.logger
-            ).flatMapThrowing { _ in
-                try NIOAsyncChannel(
-                    synchronouslyWrapping: channel,
-                    configuration: .init(
-                        inboundType: ChannelSetup.In.self,
-                        outboundType: ChannelSetup.Out.self
-                    )
-                )
-            }
-        }
-
-        do {
-            let asyncChannel: AsyncServerChannel
-            switch configuration.address {
-            case .hostname(let host, let port):
-                asyncChannel = try await bootstrap.bind(
-                    host: host,
-                    port: port,
-                    serverBackPressureStrategy: nil
-                ) { channel in
-                    setupChildChannel(channel)
-                }
-                self.logger.info("Server started and listening on \(host):\(port)")
-            case .unixDomainSocket(let path):
-                asyncChannel = try await bootstrap.bind(
-                    unixDomainSocketPath: path,
-                    cleanupExistingSocketFile: false,
-                    serverBackPressureStrategy: nil
-                ) { channel in
-                    setupChildChannel(channel)
-                }
-                self.logger.info("Server started and listening on socket path \(path)")
-            }
-            return (asyncChannel, quiescingHelper)
-        } catch {
-            quiescingHelper.initiateShutdown(promise: nil)
-            throw error
-        }
-    }
-
-    /// create a BSD sockets based bootstrap
-    private func createSocketsBootstrap(
-        configuration: HBServerConfiguration,
-        quiescingHelper: ServerQuiescingHelper
-    ) -> ServerBootstrap {
-        return ServerBootstrap(group: self.eventLoopGroup)
-            // Specify backlog and enable SO_REUSEADDR for the server itself
-            .serverChannelOption(ChannelOptions.backlog, value: numericCast(configuration.backlog))
-            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: configuration.reuseAddress ? 1 : 0)
-            .serverChannelOption(ChannelOptions.tcpOption(.tcp_nodelay), value: configuration.tcpNoDelay ? 1 : 0)
-            .serverChannelInitializer { channel in
-                channel.pipeline.addHandler(quiescingHelper.makeServerChannelHandler(channel: channel))
-            }
-            .childChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: configuration.reuseAddress ? 1 : 0)
-            .childChannelOption(ChannelOptions.tcpOption(.tcp_nodelay), value: configuration.tcpNoDelay ? 1 : 0)
-            .childChannelOption(ChannelOptions.maxMessagesPerRead, value: 1)
-            .childChannelOption(ChannelOptions.allowRemoteHalfClosure, value: true)
-    }
-
-    #if canImport(Network)
-    /// create a NIOTransportServices bootstrap using Network.framework
-    @available(macOS 10.14, iOS 12, tvOS 12, *)
-    private func createTSBootstrap(
-        configuration: HBServerConfiguration,
-        quiescingHelper: ServerQuiescingHelper
-    ) -> NIOTSListenerBootstrap? {
-        guard let bootstrap = NIOTSListenerBootstrap(validatingGroup: self.eventLoopGroup)?
-            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: configuration.reuseAddress ? 1 : 0)
-            .serverChannelInitializer({ channel in
-                channel.pipeline.addHandler(quiescingHelper.makeServerChannelHandler(channel: channel))
-            })
-            // Set the handlers that are applied to the accepted Channels
-            .childChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: configuration.reuseAddress ? 1 : 0)
-            .childChannelOption(ChannelOptions.allowRemoteHalfClosure, value: true)
-        else {
-            return nil
-        }
-
-        if let tlsOptions = configuration.tlsOptions.options {
-            return bootstrap.tlsOptions(tlsOptions)
-        }
-        return bootstrap
-    }
-    #endif
 }
 
 /// Protocol for bootstrap.

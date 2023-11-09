@@ -15,6 +15,7 @@
 import Logging
 import NIOCore
 import NIOHTTP1
+import NIOExtras
 
 public typealias HBAsyncChannelHandler<In, Out> = (NIOAsyncChannel<In, Out>) async -> Void
 
@@ -29,6 +30,9 @@ public protocol HBChannelSetup: Sendable {
     ///   - childHandlers: Channel handlers to add
     ///   - configuration: server configuration
     func initialize(channel: Channel, configuration: HBServerConfiguration, logger: Logger) -> EventLoopFuture<Void>
+
+    /// Starts the HTTP
+    func start(eventLoopGroup: EventLoopGroup, configuration: HBServerConfiguration, logger: Logger) async throws
 
     /// handle async channel
     func handle(asyncChannel: NIOAsyncChannel<In, Out>, logger: Logger) async

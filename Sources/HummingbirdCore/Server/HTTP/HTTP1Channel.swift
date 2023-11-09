@@ -16,7 +16,7 @@ import Logging
 import NIOCore
 import NIOHTTP1
 
-public struct HTTP1Channel: HBChannelSetup, HTTPChannelHandler {
+public struct HTTP1Channel: HTTP1ChannelHandler {
     public typealias In = HTTPServerRequestPart
     public typealias Out = SendableHTTPServerResponsePart
 
@@ -42,7 +42,7 @@ public struct HTTP1Channel: HBChannelSetup, HTTPChannelHandler {
         }
     }
 
-    public func handle(asyncChannel: NIOCore.NIOAsyncChannel<NIOHTTP1.HTTPServerRequestPart, SendableHTTPServerResponsePart>, logger: Logging.Logger) async {
+    public func handle(asyncChannel: NIOAsyncChannel<HTTPServerRequestPart, SendableHTTPServerResponsePart>, logger: Logging.Logger) async {
         await handleHTTP(asyncChannel: asyncChannel, logger: logger)
     }
 
